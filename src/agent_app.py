@@ -1,3 +1,4 @@
+# src/agent_app.py
 import os
 from dotenv import load_dotenv
 
@@ -15,25 +16,46 @@ load_dotenv()
 @tool
 def parse_trip_input(raw_text: str) -> dict:
     """Parse itinerary into a structured plan."""
-    plans = parse_trip(raw_text)
-    return {
-        "cities": [
+    data = parse_trip(raw_text)
+
+    # Normalize shape + ensure expected keys exist
+    cities = data.get("cities", [])
+    out_cities = []
+
+    for c in cities:
+        city_name = c.get("city", "")
+        date = c.get("date", "")
+        activities = c.get("activities", [])
+
+        out_acts = []
+        for a in activities:
+            out_acts.append(
+                {
+                    "name": a.get("name", ""),
+                    "time": a.get("time", ""),
+                    "address": a.get("address", ""),
+                    # lat/lon will be filled by resolve_place step
+                    "lat": a.get("lat"),
+                    "lon": a.get("lon"),
+                }
+            )
+
+        out_cities.append(
             {
-                "city": p.city,
-                "date": p.day.isoformat(),
-                "activities": [
-                    {"name": a.name, "time": a.time_range, "address": a.address}
-                    for a in p.activities
-                ],
+                "city": city_name,
+                "date": date,
+                "activities": out_acts,
             }
-            for p in plans
-        ]
-    }
+        )
+
+    return {"cities": out_cities}
 
 
 @tool
 def resolve_place(place_name: str, city: str) -> dict:
     """Resolve a place name into best address + lat/lon."""
+    # best_place should return something like:
+    # {"name": "...", "address": "...", "lat": 43.0, "lon": -79.0}
     return best_place(f"{place_name}, {city}")
 
 
@@ -55,12 +77,16 @@ Return JSON ONLY with this schema:
 }
 
 Rules:
-- Call parse_trip_input.
-- For each activity:
-  - If address missing OR lat/lon missing, call resolve_place.
-  - Fill address, lat, lon for every activity.
-- Output valid JSON only. No markdown. No extra text.
+1) Call parse_trip_input first.
+2) For each activity, if address is empty OR lat/lon is missing:
+   - Call resolve_place(place_name, city)
+   - The tool returns fields: address, lat, lon (and maybe name).
+   - Copy address/lat/lon into the activity.
+   - Keep the activity time unchanged.
+3) Every activity must end with non-empty address and numeric lat/lon.
+4) Output valid JSON only. No markdown. No extra text.
 """
+
 
 
 def build_agent():

@@ -1,70 +1,86 @@
 #for parsing input for hard mode 
+#used by agent and main (enforces JSON format)
+# src/parser.py
+# src/parser.py
+from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import date
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
-@dataclass
-class Activity:
-    name: str
-    time_range: Optional[str] = None
-    address: Optional[str] = None
+_CITY_RE = re.compile(
+    r"^\s*City\s*(\d+)\s*:?\s*(.+?)\s+(\d{4}-\d{2}-\d{2})\s*$",
+    re.IGNORECASE,
+)
 
 
-@dataclass
-class CityPlan:
-    city: str
-    day: date
-    activities: List[Activity]
-
-
-_CITY_RE = re.compile(r"^City\s*\d*\s*:\s*(.+?)\s+(\d{4}-\d{2}-\d{2})\s*$", re.IGNORECASE)
-
-
-def parse_trip(text: str) -> List[CityPlan]:
+def parse_trip(text: str) -> Dict[str, Any]:
     """
-    Input example:
-    City1: Toronto 2025-01-31
-    CN Tower;8am-9am
-    Royal Ontario Museum;10am-11am
-
-    Also supports address line:
-    Royal Ontario Museum;100 Queen's Park, Toronto, ON;10am-11am
+    Backward-compatible name.
+    Your agent_app.py expects parse_trip().
     """
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    plans: List[CityPlan] = []
+    return parse_itinerary(text)
 
-    current_city: Optional[str] = None
-    current_day: Optional[date] = None
-    current_acts: List[Activity] = []
 
-    def flush():
-        nonlocal current_city, current_day, current_acts
-        if current_city and current_day:
-            plans.append(CityPlan(city=current_city, day=current_day, activities=current_acts))
-        current_city, current_day, current_acts = None, None, []
+def parse_itinerary(text: str) -> Dict[str, Any]:
+    """
+    Supported city headers:
+      City1: Toronto 2026-01-31
+      City1 Toronto 2026-01-31
+      City3 Los Angeles 2026-02-02
 
-    for ln in lines:
-        m = _CITY_RE.match(ln)
+    Supported activity lines:
+      Place;Time
+      Place;Address;Time
+    """
+    cities: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+
+    lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+
+        # City header
+        m = _CITY_RE.match(line)
         if m:
-            flush()
-            current_city = m.group(1).strip()
-            y, mo, d = [int(x) for x in m.group(2).split("-")]
-            current_day = date(y, mo, d)
+            city_name = m.group(2).strip()
+            date_str = m.group(3).strip()
+            current = {"city": city_name, "date": date_str, "activities": []}
+            cities.append(current)
             continue
 
-        parts = [p.strip() for p in ln.split(";") if p.strip()]
-        if not parts:
-            continue
+        # If user forgot a city header
+        if current is None:
+            current = {"city": "(unknown city)", "date": "(unknown date)", "activities": []}
+            cities.append(current)
 
-        if len(parts) == 1:
-            current_acts.append(Activity(name=parts[0]))
-        elif len(parts) == 2:
-            current_acts.append(Activity(name=parts[0], time_range=parts[1]))
+        activity = _parse_activity_line(line)
+        if activity:
+            current["activities"].append(activity)
         else:
-            current_acts.append(Activity(name=parts[0], address=parts[1], time_range=parts[2]))
+            current["activities"].append({"name": line, "time": "", "address": ""})
 
-    flush()
-    return plans
+    return {"cities": cities}
+
+
+def _parse_activity_line(line: str) -> Optional[Dict[str, str]]:
+    if ";" not in line:
+        return None
+
+    parts = [p.strip() for p in line.split(";")]
+    parts = [p for p in parts if p != ""]
+    if len(parts) < 2:
+        return None
+
+    # Place;Time
+    if len(parts) == 2:
+        return {"name": parts[0], "address": "", "time": parts[1]}
+
+    # Place;Address;Time  (or more parts => join middle as address)
+    name = parts[0]
+    time = parts[-1]
+    address = "; ".join(parts[1:-1])
+    return {"name": name, "address": address, "time": time}
